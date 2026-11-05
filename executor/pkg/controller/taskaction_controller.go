@@ -1093,7 +1093,7 @@ func (r *TaskActionReconciler) reconcileTask(
 		)
 	}
 
-	// Whether the plugin asked for its resource to be deleted if this failure ends the task.
+	// Whether the plugin asked for its resource to be deleted if this failure ends the attempt.
 	// Read it before the retry block below, which rebuilds a final failure without the flag.
 	cleanupOnFailure := phaseInfo.CleanupOnFailure()
 
@@ -1106,10 +1106,13 @@ func (r *TaskActionReconciler) reconcileTask(
 
 		if currentAttempts < maxAttempts {
 			restartedAt := r.now()
-			// Abort (delete) the current pod before incrementing attempts.
+			// The failed attempt keeps its resource, like a final failure below, so its logs stay
+			// readable; the next attempt gets a new name. Delete it only when the plugin asks.
 			// tCtx was built with the current attempt number so Abort targets the right pod.
-			if abortErr := p.Abort(ctx, tCtx); abortErr != nil {
-				logger.Error(abortErr, "failed to abort pod during in-place restart")
+			if cleanupOnFailure {
+				if abortErr := p.Abort(ctx, tCtx); abortErr != nil {
+					logger.Error(abortErr, "failed to abort pod during in-place restart")
+				}
 			}
 			// Track the new attempt count; applied to Status.Attempts after the stateMgr block.
 			restartAttempts = currentAttempts + 1
@@ -1139,7 +1142,7 @@ func (r *TaskActionReconciler) reconcileTask(
 	// A task that fails for good keeps its resource until the TaskAction is garbage collected.
 	// A plugin asks for cleanup when that resource would otherwise keep going: a gang an admission
 	// gate took back is re-admitted by the gate and would run again for a task that has already
-	// failed. Delete it now, as a retry above already does.
+	// failed. Delete it now, as a retry above does for the same flag.
 	if !cacheShortCircuited && cleanupOnFailure && phaseInfo.Phase() == pluginsCore.PhasePermanentFailure {
 		if abortErr := p.Abort(ctx, tCtx); abortErr != nil {
 			logger.Error(abortErr, "failed to clean up the resource of a failed task")

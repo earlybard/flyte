@@ -1959,6 +1959,69 @@ var _ = Describe("TaskAction Controller", func() {
 			Expect(fake.abortCalls).To(BeZero())
 		})
 
+		It("keeps the failed attempt's resource when a retry restarts without cleanup", func() {
+			base := time.Date(2026, time.October, 7, 0, 0, 0, 0, time.UTC)
+			fakeClock := testingclock.NewFakeClock(base)
+			failedAt := base.Add(time.Minute)
+			fake := &fakePlugin{
+				id: cleanupPluginID,
+				transitions: []pluginsCore.Transition{
+					runningTransition(base),
+					pluginsCore.DoTransition(pluginsCore.PhaseInfoRetryableFailure(
+						"Error", "primary exited with code 1", &pluginsCore.TaskInfo{OccurredAt: &failedAt},
+					)),
+				},
+			}
+			r := newReconciler(fake, fakeClock, &recordingEventsClient{}, nil)
+			nn := createTaskAction(
+				"no-cleanup-retry",
+				buildTaskTemplateBytesWithTimeoutAndRetries("timeout-test", "busybox", time.Hour, 2),
+			)
+			request := reconcile.Request{NamespacedName: nn}
+
+			_, err := r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			fakeClock.Step(time.Minute)
+			_, err = r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			persisted := getTaskAction(nn)
+			Expect(isTerminal(persisted)).To(BeFalse())
+			Expect(persisted.Status.Attempts).To(Equal(uint32(2)), "the task restarted")
+			Expect(fake.abortCalls).To(BeZero(), "the failed attempt's pod stays for its logs")
+		})
+
+		It("cleans up the failed attempt's resource when a retry restarts with cleanup", func() {
+			base := time.Date(2026, time.October, 7, 0, 0, 0, 0, time.UTC)
+			fakeClock := testingclock.NewFakeClock(base)
+			failedAt := base.Add(time.Minute)
+			fake := &fakePlugin{
+				id: cleanupPluginID,
+				transitions: []pluginsCore.Transition{
+					runningTransition(base),
+					pluginsCore.DoTransition(pluginsCore.PhaseInfoRetryableFailureWithCleanup(
+						"Error", "primary exited, sidecar still running", &pluginsCore.TaskInfo{OccurredAt: &failedAt},
+					)),
+				},
+			}
+			r := newReconciler(fake, fakeClock, &recordingEventsClient{}, nil)
+			nn := createTaskAction(
+				"cleanup-retry",
+				buildTaskTemplateBytesWithTimeoutAndRetries("timeout-test", "busybox", time.Hour, 2),
+			)
+			request := reconcile.Request{NamespacedName: nn}
+
+			_, err := r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			fakeClock.Step(time.Minute)
+			_, err = r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			persisted := getTaskAction(nn)
+			Expect(persisted.Status.Attempts).To(Equal(uint32(2)), "the task restarted")
+			Expect(fake.abortCalls).To(Equal(1))
+		})
+
 		Context("action deadline", func() {
 			withDeadline := func(template []byte, deadline time.Duration) []byte {
 				tmpl := &core.TaskTemplate{}

@@ -333,6 +333,11 @@ func DemystifyPodStatus(ctx context.Context, pod *v1.Pod, info pluginsCore.TaskI
 			} else if phaseInfo.Phase() == pluginsCore.PhaseRunning && hasLogs {
 				phaseInfo = phaseInfo.WithVersion(pluginsCore.DefaultPhaseVersion + 1)
 			}
+			// The primary container failed while the pod still runs (e.g. sidecars): delete the pod
+			// rather than keep it running for an attempt that has ended.
+			if phaseInfo.Phase().IsFailure() {
+				phaseInfo = phaseInfo.WithCleanupOnFailure()
+			}
 		}
 	}
 

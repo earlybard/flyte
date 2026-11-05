@@ -828,6 +828,33 @@ func TestDemystifiedSidecarStatus_PrimaryFailed(t *testing.T) {
 	phaseInfo, err := DefaultPodPlugin.GetTaskPhase(context.TODO(), pluginContext, res)
 	assert.Nil(t, err)
 	assert.Equal(t, pluginsCore.PhaseRetryableFailure, phaseInfo.Phase())
+	assert.True(t, phaseInfo.CleanupOnFailure(), "the pod still runs, so the failure deletes it")
+}
+
+func TestDemystifiedSidecarStatus_PodFailedKeepsPod(t *testing.T) {
+	res := &v1.Pod{
+		Status: v1.PodStatus{
+			Phase: v1.PodFailed,
+			ContainerStatuses: []v1.ContainerStatus{
+				{
+					Name: "Primary",
+					State: v1.ContainerState{
+						Terminated: &v1.ContainerStateTerminated{
+							ExitCode: 1,
+						},
+					},
+				},
+			},
+		},
+	}
+	res.SetAnnotations(map[string]string{
+		flytek8s.PrimaryContainerKey: "Primary",
+	})
+	pluginContext := getDummySidecarPluginContext(&core.TaskTemplate{}, sidecarResourceRequirements)
+	phaseInfo, err := DefaultPodPlugin.GetTaskPhase(context.TODO(), pluginContext, res)
+	assert.Nil(t, err)
+	assert.Equal(t, pluginsCore.PhaseRetryableFailure, phaseInfo.Phase())
+	assert.False(t, phaseInfo.CleanupOnFailure(), "a finished pod is kept for its logs")
 }
 
 func TestDemystifiedSidecarStatus_PrimarySucceeded(t *testing.T) {
